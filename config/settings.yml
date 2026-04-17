@@ -9,6 +9,16 @@ plugins:
     default: "1"
     allow_any: false
     refresh: true
+  private_topics_allowed_user_manager_groups:
+    client: false
+    type: group_list
+    list_type: compact
+    default: ""
+    allow_any: false
+    refresh: true
   private_topics_admin_sees_all:
+    client: false
+    default: true
+  private_topics_send_access_granted_notifications:
     client: false
     default: true

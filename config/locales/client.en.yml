@@ -5,4 +5,46 @@ en:
         title: "Private Topics"
         enabled: "Enable Private Topics for this category"
         allowed_groups_description: "Topics are visible for the topic starter and for users in the following groups:"
+        topic_access_help: "When enabled, topic authors, admins who can already view the topic, and configured manager groups can add specific users who may also view that topic."
         warning: "<b>Warning</b>: The 'everyone' group has access to this category. This will override the private topics setting and topics will not be private. Please remove 'everyone' and add 'trust_level_0' instead."
+    private_topics:
+      allowed_users:
+        button: "Manage Access"
+        modal_title: "Manage Topic Access"
+        modal_description: "Add or remove individual users and groups who may access this topic."
+        chooser_label: "Additional viewers"
+        chooser_help: "Only the topic author, admins who can already view the topic, and configured manager groups can change this list."
+        placeholder: "Search users"
+        empty: "No additional users or groups have been added."
+        user_chooser_label: "Add users"
+        group_chooser_label: "Add groups"
+        add_users: "Add Users"
+        add_groups: "Add Groups"
+        remove: "Remove"
+        close: "Close"
+        save: "Save Access List"
+        save_success: "The topic access list has been updated."
+        saving: "Saving..."
+        save_error: "Unable to update the topic access list."
+        tabs:
+          access: "Access"
+          history: "History"
+        access_levels:
+          read: "Read only"
+          reply: "Read and reply"
+        principal_types:
+          user: "User"
+          group: "Group"
+        table:
+          principal: "Principal"
+          type: "Type"
+          access_level: "Access"
+          actions: "Actions"
+        history:
+          loading: "Loading access history..."
+          empty: "No access changes have been logged yet."
+          load_error: "Unable to load the access history."
+          actions:
+            granted: "was added"
+            removed: "was removed"
+            access_level_changed: "access level changed"

@@ -1,0 +1,50 @@
+ko:
+  js:
+    category:
+      private_topics:
+        title: "비공개 게시글"
+        enabled: "이 카테고리에서 비공개 게시글 사용"
+        allowed_groups_description: "게시글 작성자와 다음 그룹 사용자에게 게시글을 표시합니다:"
+        topic_access_help: "활성화하면 게시글 작성자, 이미 게시글을 볼 수 있는 관리자, 그리고 설정된 관리 그룹이 특정 사용자를 추가로 열람 가능하게 지정할 수 있습니다."
+        warning: "<b>주의</b>: 'everyone' 그룹에 이 카테고리 접근 권한이 있습니다. 이 경우 private topics 설정이 무력화되어 게시글이 비공개가 되지 않습니다. 'everyone'을 제거하고 대신 'trust_level_0'을 추가하세요."
+    private_topics:
+      allowed_users:
+        button: "접근권한 관리"
+        modal_title: "게시글 접근권한 관리"
+        modal_description: "이 게시글에 접근할 수 있는 사용자와 그룹을 추가하거나 제거합니다."
+        chooser_label: "추가 열람자"
+        chooser_help: "게시글 작성자, 이미 게시글을 볼 수 있는 관리자, 그리고 설정된 관리 그룹만 이 목록을 변경할 수 있습니다."
+        placeholder: "사용자 검색"
+        empty: "추가된 사용자나 그룹이 없습니다."
+        user_chooser_label: "사용자 추가"
+        group_chooser_label: "그룹 추가"
+        add_users: "사용자 추가"
+        add_groups: "그룹 추가"
+        remove: "제거"
+        close: "닫기"
+        save: "접근권한 저장"
+        save_success: "게시글 접근권한 목록이 저장되었습니다."
+        saving: "저장 중..."
+        save_error: "접근권한 목록을 저장할 수 없습니다."
+        tabs:
+          access: "접근권한"
+          history: "이력"
+        access_levels:
+          read: "읽기 전용"
+          reply: "읽기 및 답글"
+        principal_types:
+          user: "사용자"
+          group: "그룹"
+        table:
+          principal: "대상"
+          type: "유형"
+          access_level: "권한"
+          actions: "작업"
+        history:
+          loading: "접근권한 이력을 불러오는 중입니다..."
+          empty: "기록된 접근권한 변경 이력이 없습니다."
+          load_error: "접근권한 이력을 불러올 수 없습니다."
+          actions:
+            granted: "추가됨"
+            removed: "제거됨"
+            access_level_changed: "권한이 변경됨"

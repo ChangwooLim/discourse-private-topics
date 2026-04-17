@@ -1,7 +1,7 @@
 import Component from '@glimmer/component';
 import { tracked } from '@glimmer/tracking';
 import { Input } from "@ember/component";
-import { action, computed } from "@ember/object";
+import { action } from "@ember/object";
 import { service } from "@ember/service";
 import { htmlSafe } from "@ember/template";
 import { i18n } from "discourse-i18n";
@@ -26,7 +26,6 @@ export default class PrivateTopics extends Component {
     this.selectedGroups = groupNames;
   }
 
-  @computed("site.groups.[]")
   get availableGroups() {
     return (this.site.groups || [])
       .map((g) => { // don't list "everyone"
@@ -88,6 +87,9 @@ export default class PrivateTopics extends Component {
           <label>
             {{i18n "category.private_topics.allowed_groups_description"}}
           </label>
+          <p class="help">
+            {{i18n "category.private_topics.topic_access_help"}}
+          </p>
           <div class="value">
           <GroupChooser
             @content={{this.availableGroups}}

@@ -1,357 +1,229 @@
 # name: discourse-private-topics
 # about: Allows to keep topics private to the topic creator and specific groups.
-# version: 1.5.16
+# version: 1.7.0
 # authors: Communiteq
 # meta_topic_id: 268646
 # url: https://github.com/communiteq/discourse-private-topics
 
 enabled_site_setting :private_topics_enabled
 
-module ::DiscoursePrivateTopics
-  # gets a list of user ids we should always show topics for
-  def DiscoursePrivateTopics.get_unfiltered_user_ids(user)
-    user_ids = [ Discourse.system_user.id ]
-    user_ids.append user.id if user && !user.anonymous?
-    group_ids = SiteSetting.private_topics_permitted_groups.split("|").map(&:to_i)
-    user_ids = user_ids + Group.where(id: group_ids).joins(:users).pluck('users.id')
-    user_ids.uniq
-  end
-
-  # gets a list of category ids we should not show topics for (unless the user is unfiltered)
-  def DiscoursePrivateTopics.get_filtered_category_ids(user)
-    return [] unless SiteSetting.private_topics_enabled
-
-    # first get all the categories with private topics enabled
-    cat_ids = CategoryCustomField.where(name: 'private_topics_enabled').pluck(:category_id).to_a
-    # we need to initialize the hash in case there are categories without whitelisted groups, or if we're anonymous user
-    cat_group_map = cat_ids.map { |i| [i, []] }.to_h
-
-    # remove the categories that have a whitelisted group we're a member of
-    if user
-      # get the groups that are excluded from filtering for each category
-      excluded_map = CategoryCustomField.
-        where(category_id: cat_ids).
-        where(name: 'private_topics_allowed_groups').
-        each_with_object({}) do |record, h|
-          h[record.category_id] = record.value.split(',').map(&:to_i)
-        end
-      cat_group_map.merge! (excluded_map)
-      # compare them to the groups we're member of
-      # so we end up with a list of category ids that we cannot see other peoples topics in
-
-      user_group_ids = user.groups.pluck(:id).to_a
-      cat_group_map = cat_group_map.reject { |k, v| (v & user_group_ids).any? }
-    end
-
-    filtered_category_ids = cat_group_map.keys
-  end
-end
+require_relative "lib/discourse_private_topics"
+require_relative "lib/discourse_private_topics/access"
+require_relative "app/models/private_topic_allowed_user"
+require_relative "app/models/private_topic_allowed_group"
+require_relative "app/models/private_topic_access_event"
+require_relative "lib/discourse_private_topics/modifiers/topic_view_link_counts"
+require_relative "lib/discourse_private_topics/patches/category_detailed_serializer"
+require_relative "lib/discourse_private_topics/patches/discourse_ai_embeddings_semantic_search"
+require_relative "lib/discourse_private_topics/patches/discourse_solved_solved_topics_controller"
+require_relative "lib/discourse_private_topics/patches/follow_notification_handler"
+require_relative "lib/discourse_private_topics/patches/guardian"
+require_relative "lib/discourse_private_topics/patches/post"
+require_relative "lib/discourse_private_topics/patches/search"
+require_relative "lib/discourse_private_topics/patches/topic"
+require_relative "lib/discourse_private_topics/patches/topic_guardian"
+require_relative "lib/discourse_private_topics/patches/topic_query"
+require_relative "lib/discourse_private_topics/patches/user_action"
+require_relative "lib/discourse_private_topics/patches/user_summary"
 
 after_initialize do
-  # hide topics from search results
-  module PrivateTopicsPatchSearch
-    def execute(readonly_mode: @readonly_mode)
-      super
+  load File.expand_path("app/controllers/discourse_private_topics/allowed_users_controller.rb", __dir__)
+  load File.expand_path("config/routes.rb", __dir__)
 
-      if SiteSetting.private_topics_enabled && !(SiteSetting.private_topics_admin_sees_all & @guardian&.user&.admin?)
-        cat_ids = DiscoursePrivateTopics.get_filtered_category_ids(@guardian.user)
-        unless cat_ids.empty?
-          user_ids = DiscoursePrivateTopics.get_unfiltered_user_ids(@guardian.user)
-          @results.posts.delete_if do |post|
-            next false if user_ids.include? post&.user&.id
-            post&.topic&.category&.id && cat_ids.include?(post.topic.category&.id)
-          end
-        end
-      end
-
-      @results
-    end
-  end
-
-  module PrivateTopicsPatchPost
-    def self.prepended(base)
-      base.scope :public_posts, -> {
-        posts = base.joins(:topic).where("topics.archetype <> ?", Archetype.private_message)
-        private_category_ids = CategoryCustomField.where(name: 'private_topics_enabled').pluck(:category_id).to_a
-        if SiteSetting.private_topics_enabled && private_category_ids.any?
-          posts.where.not("topics.category_id IN (?)", private_category_ids)
-        else
-          posts
-        end
-      }
-    end
-  end
-
-  # hide topics on from post stream and raw
-  module ::TopicGuardian
-    alias_method :org_can_see_topic?, :can_see_topic?
-
-    def can_see_topic?(topic, hide_deleted = true)
-      allowed = org_can_see_topic?(topic, hide_deleted)
-      return false unless allowed # false stays false
-
-      if SiteSetting.private_topics_enabled && !(SiteSetting.private_topics_admin_sees_all & @user&.admin?)
-        return true unless topic&.category # skip for PM's
-
-        user_ids = DiscoursePrivateTopics.get_unfiltered_user_ids(@user)
-        return true if user_ids.include?(topic&.user&.id) # topic authors and permitted users are always good
-
-        cat_ids = DiscoursePrivateTopics.get_filtered_category_ids(@user)
-        return true if cat_ids.empty?
-
-        return false if cat_ids.include?(topic.category&.id)
-      end
-
-      true
-    end
-  end
-
-  # hide topics from user profile -> activity
-  class ::UserAction
-    module PrivateTopicsApplyCommonFilters
-      def apply_common_filters(builder, user_id, guardian, ignore_private_messages=false)
-        if SiteSetting.private_topics_enabled && !(SiteSetting.private_topics_admin_sees_all & guardian&.user&.admin?)
-          cat_ids = DiscoursePrivateTopics.get_filtered_category_ids(guardian.user).join(",")
-          unless cat_ids.empty?
-            user_ids = DiscoursePrivateTopics.get_unfiltered_user_ids(guardian.user).join(",")
-            builder.where("(t.category_id NOT IN (#{cat_ids}) OR p.user_id IN (#{user_ids}))")
-          end
-        end
-        super(builder, user_id, guardian, ignore_private_messages)
-      end
-    end
-    singleton_class.prepend PrivateTopicsApplyCommonFilters
-  end
-
-  # hide topics from user profile -> summary
-  module PrivateTopicsPatchUserSummary
-    def filtered_category_ids
-      @cat_ids ||= DiscoursePrivateTopics.get_filtered_category_ids(@guardian&.user).join(",")
-    end
-
-    def unfiltered_user_ids
-      @user_ids ||= DiscoursePrivateTopics.get_unfiltered_user_ids(@guardian&.user).join(",")
-    end
-
-    def topics
-      if SiteSetting.private_topics_enabled && !(SiteSetting.private_topics_admin_sees_all & @guardian&.user&.admin?) && !filtered_category_ids.empty?
-        return super.where("(topics.category_id NOT IN (#{filtered_category_ids}) OR topics.user_id IN (#{unfiltered_user_ids}))")
-      end
-
-      super
-    end
-
-    def replies
-      if SiteSetting.private_topics_enabled && !(SiteSetting.private_topics_admin_sees_all & @guardian&.user&.admin?) && !filtered_category_ids.empty?
-        return super.where("(topics.category_id NOT IN (#{filtered_category_ids}) OR topics.user_id IN (#{unfiltered_user_ids}))")
-      end
-
-      super
-    end
-
-    def links
-      if SiteSetting.private_topics_enabled && !(SiteSetting.private_topics_admin_sees_all & @guardian&.user&.admin?) && !filtered_category_ids.empty?
-        return super.where("(topics.category_id NOT IN (#{filtered_category_ids}) OR topics.user_id IN (#{unfiltered_user_ids}))")
-      end
-
-      super
-    end
-  end
-
-  module PrivateTopicsPatchCategoryDetailedSerializer
-    def include_displayable_topics?
-      displayable_topics.present? && custom_fields['private_topics_enabled'] != 't'
-    end
-  end
-
-  # don't send follow plugin notifications for the entire category (regardless of whether a user can see)
-  module PrivateTopicsFollowNotificationHandler
-    def handle
-      return if post&.topic&.category&.id && DiscoursePrivateTopics.get_filtered_category_ids(nil).include?(post.topic.category&.id)
-      super
-    end
-  end
-
-  module PrivateTopicsDiscourseAiEmbeddingsSemanticSearch
-    def search_for_topics(query, page = 1, hyde: true)
-      if SiteSetting.private_topics_enabled
-        posts = super
-        filtered_posts = posts.reject { |post| !@guardian.can_see_topic?(post.topic) }
-      else
-        super
-      end
-    end
-  end
-
-  module PrivateTopicsDiscourseSolvedSolvedTopicsController
-    def by_user
-      return super unless SiteSetting.private_topics_enabled && !(SiteSetting.private_topics_admin_sees_all & current_user&.admin?)
-
-      # copied straight from DiscourseSolved::SolvedTopicsController#by_user
-      # with the addition of the private topics filtering in the where clause (marked ***)
-
-      params.require(:username)
-      user =
-        fetch_user_from_params(
-          include_inactive:
-            current_user.try(:staff?) || (current_user && SiteSetting.show_inactive_accounts),
-        )
-      raise Discourse::NotFound unless guardian.public_can_see_profiles?
-      raise Discourse::NotFound unless guardian.can_see_profile?(user)
-
-      offset = [0, params[:offset].to_i].max
-      limit = params.fetch(:limit, 30).to_i
-
-      filtered_category_ids = guardian.secure_category_ids - DiscoursePrivateTopics.get_filtered_category_ids(current_user)
-      posts =
-        Post
-          .joins(
-            "INNER JOIN discourse_solved_solved_topics ON discourse_solved_solved_topics.answer_post_id = posts.id",
-          )
-          .joins(:topic)
-          .joins("LEFT JOIN categories ON categories.id = topics.category_id")
-          .where(user_id: user.id, deleted_at: nil)
-          .where(topics: { archetype: Archetype.default, deleted_at: nil })
-          .where(
-            "topics.category_id IS NULL OR NOT categories.read_restricted OR topics.category_id IN (:secure_category_ids)",
-            secure_category_ids: filtered_category_ids, # *** filter out private topics
-          )
-          .includes(:user, topic: %i[category tags])
-          .order("discourse_solved_solved_topics.created_at DESC")
-          .offset(offset)
-          .limit(limit)
-
-      render_serialized(posts, DiscourseSolved::SolvedPostSerializer, root: "user_solved_posts")
-    end
-  end
-
-  Site.preloaded_category_custom_fields << 'private_topics_enabled'
-  Site.preloaded_category_custom_fields << 'private_topics_allowed_groups'
-
-  # this removes the categories from the "recent topics" shown on the 404 page
-  # called from ApplicationController.build_not_found_page
-  # this is cached without a user so just pass nil and exclude every private category
-  class ::Topic
-    def self.recent(max = 10)
-      cat_ids = DiscoursePrivateTopics.get_filtered_category_ids(nil).join(",")
-      if cat_ids.empty?
-        Topic.listable_topics.visible.secured.order("created_at desc").limit(max)
-      else
-        Topic.listable_topics.visible.secured.where("category_id NOT IN (#{cat_ids})").order("created_at desc").limit(max)
-      end
-    end
-  end
-
-  class ::Topic
-    class << self
-      alias_method :original_for_digest_private_topics, :for_digest
-
-      def for_digest(user, since, opts = nil)
-        topics = original_for_digest_private_topics(user, since, opts)
-        filtered_category_ids ||= DiscoursePrivateTopics.get_filtered_category_ids(user).join(",")
-        if SiteSetting.private_topics_enabled && !(SiteSetting.private_topics_admin_sees_all & user&.admin?) && !filtered_category_ids.empty?
-          unfiltered_user_ids = DiscoursePrivateTopics.get_unfiltered_user_ids(user).join(",")
-          return topics.where("(topics.category_id NOT IN (#{filtered_category_ids}) OR topics.user_id IN (#{unfiltered_user_ids}))")
-        end
-        topics
-      end
-
-      alias_method :original_similar_to, :similar_to
-
-      def similar_to(title, raw, user = nil)
-        similar_topics = original_similar_to(title, raw, user)
-        filtered_category_ids ||= DiscoursePrivateTopics.get_filtered_category_ids(user)
-        if SiteSetting.private_topics_enabled && !(SiteSetting.private_topics_admin_sees_all & user&.admin?) && !filtered_category_ids.empty?
-          filtered_topics = similar_topics.where.not(category_id: filtered_category_ids)
-          filtered_topics = filtered_topics.or(similar_topics.where(user_id: user.id)) if user.present?
-          return filtered_topics
-        end
-        similar_topics
-      end
-    end
-  end
+  Site.preloaded_category_custom_fields << "private_topics_enabled"
+  Site.preloaded_category_custom_fields << "private_topics_allowed_groups"
 
   class ::Post
-    prepend PrivateTopicsPatchPost
+    prepend DiscoursePrivateTopics::Patches::Post
   end
 
   class ::Search
-    prepend PrivateTopicsPatchSearch
+    prepend DiscoursePrivateTopics::Patches::Search
+  end
+
+  module ::TopicGuardian
+    prepend DiscoursePrivateTopics::Patches::TopicGuardian
+  end
+
+  class ::Guardian
+    prepend DiscoursePrivateTopics::Patches::Guardian
+  end
+
+  class ::UserAction
+    singleton_class.prepend DiscoursePrivateTopics::Patches::UserAction
   end
 
   class ::UserSummary
-    prepend PrivateTopicsPatchUserSummary
+    prepend DiscoursePrivateTopics::Patches::UserSummary
   end
 
   class ::CategoryDetailedSerializer
-    prepend PrivateTopicsPatchCategoryDetailedSerializer
+    prepend DiscoursePrivateTopics::Patches::CategoryDetailedSerializer
+  end
+
+  class << ::Topic
+    prepend DiscoursePrivateTopics::Patches::Topic
   end
 
   if defined?(Follow::NotificationHandler)
     class ::Follow::NotificationHandler
-      prepend PrivateTopicsFollowNotificationHandler
+      prepend DiscoursePrivateTopics::Patches::FollowNotificationHandler
     end
   end
 
   if defined?(DiscourseAi::Embeddings::SemanticSearch)
     class ::DiscourseAi::Embeddings::SemanticSearch
-      prepend PrivateTopicsDiscourseAiEmbeddingsSemanticSearch
+      prepend DiscoursePrivateTopics::Patches::DiscourseAiEmbeddingsSemanticSearch
     end
   end
 
   if defined?(DiscourseSolved::SolvedTopicsController)
     class ::DiscourseSolved::SolvedTopicsController
-      prepend PrivateTopicsDiscourseSolvedSolvedTopicsController
+      prepend DiscoursePrivateTopics::Patches::DiscourseSolvedSolvedTopicsController
     end
   end
 
-  # hide topics from topic lists
   TopicQuery.add_custom_filter(:private_topics) do |result, query|
-    if SiteSetting.private_topics_enabled && ! (SiteSetting.private_topics_admin_sees_all && query&.guardian&.user&.admin?)
-      cat_ids = DiscoursePrivateTopics.get_filtered_category_ids(query&.guardian&.user).join(",")
-      unless cat_ids.empty?
-        user_ids = DiscoursePrivateTopics.get_unfiltered_user_ids(query&.guardian&.user).join(",")
-        result = result.where("(topics.category_id NOT IN (#{cat_ids}) OR topics.user_id IN (#{user_ids}))")
-      end
-    end
-    result
+    DiscoursePrivateTopics::Patches::TopicQuery.filter(result, query)
   end
-
-  # prevent backlinks to show up in wrong places
-  # https://meta.discourse.org/t/private-topics-plugin/268646/81
 
   register_modifier(:topic_view_link_counts) do |link_counts|
-    begin
-      if SiteSetting.private_topics_enabled
-        cat_ids = DiscoursePrivateTopics.get_filtered_category_ids(nil)
-        unless cat_ids.empty?
-          # get all topic ids
-          topic_ids = link_counts.values.flatten.map do |link|
-            next unless link.is_a?(Hash) && link[:internal] && link[:url].is_a?(String)
-            match = link[:url].match(%r{/t/[^/]+/(\d+)(?:/\d+)?})
-            match[1].to_i if match
-          end.compact.uniq
+    DiscoursePrivateTopics::Modifiers::TopicViewLinkCounts.call(link_counts)
+  end
 
-          # get all categories for these topics
-          topic_category_map = Topic.where(id: topic_ids).pluck(:id, :category_id).to_h
+  add_to_serializer(:topic_view, :can_manage_private_topic_access) do
+    topic = object.topic
 
-          # filter the links
-          link_counts.each do |post_id, links|
-            link_counts[post_id] = links.reject do |link|
-              next false unless link.is_a?(Hash) && link[:internal] && link[:url].is_a?(String)
-              match = link[:url].match(%r{/t/[^/]+/(\d+)(?:/\d+)?})
-              next false unless match
-              topic_id = match[1].to_i
-              cat_ids.include?(topic_category_map[topic_id])
-            end
-          end
-          # remove any empty entries
-          link_counts.delete_if { |_post_id, links| !links.is_a?(Array) || links.empty? }
-        end
-      end
-    rescue => e
-      Rails.logger.warn("topic_view_link_counts modifier failed: #{e.class} - #{e.message}")
-    end
-    link_counts
+    DiscoursePrivateTopics.access_entries_storage_ready? &&
+      scope.can_see_topic?(topic) &&
+      DiscoursePrivateTopics.can_manage_topic_access?(topic, scope.user)
+  end
+
+  add_to_serializer(:topic_view, :can_manage_private_topic_allowed_users) do
+    topic = object.topic
+
+    DiscoursePrivateTopics.access_entries_storage_ready? &&
+      scope.can_see_topic?(topic) &&
+      DiscoursePrivateTopics.can_manage_topic_access?(topic, scope.user)
+  end
+
+  add_to_serializer(:topic_view, :can_view_private_topic_access_history) do
+    topic = object.topic
+
+    DiscoursePrivateTopics.access_history_storage_ready? &&
+      scope.can_see_topic?(topic) &&
+      DiscoursePrivateTopics.can_view_topic_access_history?(topic, scope.user)
+  end
+
+  add_to_serializer(:topic_view, :include_private_topic_access_entries?) do
+    topic = object.topic
+
+    DiscoursePrivateTopics.access_entries_storage_ready? &&
+      scope.can_see_topic?(topic) &&
+      DiscoursePrivateTopics.can_manage_topic_access?(topic, scope.user)
+  end
+
+  add_to_serializer(:topic_view, :private_topic_access_entries) do
+    DiscoursePrivateTopics.serialized_access_entries(object.topic)
+  end
+
+  add_to_serializer(:topic_view, :include_private_topic_manageable_groups?) do
+    topic = object.topic
+
+    scope.can_see_topic?(topic) &&
+      DiscoursePrivateTopics.can_manage_topic_access?(topic, scope.user)
+  end
+
+  add_to_serializer(:topic_view, :private_topic_manageable_groups) do
+    DiscoursePrivateTopics.manageable_groups_for_user(scope.user)
+  end
+
+  add_to_serializer(:topic_view, :include_private_topic_allowed_users?) do
+    topic = object.topic
+
+    DiscoursePrivateTopics.allowed_users_storage_ready? &&
+      scope.can_see_topic?(topic) &&
+      DiscoursePrivateTopics.can_manage_topic_access?(topic, scope.user)
+  end
+
+  add_to_serializer(:topic_view, :private_topic_allowed_users) do
+    DiscoursePrivateTopics.serialized_allowed_users(object.topic)
+  end
+
+  add_to_serializer(:post, :can_manage_private_topic_access) do
+    next false unless object.post_number == 1
+
+    topic = object.topic
+
+    DiscoursePrivateTopics.access_entries_storage_ready? &&
+      scope.can_see_topic?(topic) &&
+      DiscoursePrivateTopics.can_manage_topic_access?(topic, scope.user)
+  end
+
+  add_to_serializer(:post, :can_manage_private_topic_allowed_users) do
+    next false unless object.post_number == 1
+
+    topic = object.topic
+
+    DiscoursePrivateTopics.access_entries_storage_ready? &&
+      scope.can_see_topic?(topic) &&
+      DiscoursePrivateTopics.can_manage_topic_access?(topic, scope.user)
+  end
+
+  add_to_serializer(:post, :can_view_private_topic_access_history) do
+    next false unless object.post_number == 1
+
+    topic = object.topic
+
+    DiscoursePrivateTopics.access_history_storage_ready? &&
+      scope.can_see_topic?(topic) &&
+      DiscoursePrivateTopics.can_view_topic_access_history?(topic, scope.user)
+  end
+
+  add_to_serializer(:post, :include_private_topic_access_entries?) do
+    next false unless object.post_number == 1
+
+    topic = object.topic
+
+    DiscoursePrivateTopics.access_entries_storage_ready? &&
+      scope.can_see_topic?(topic) &&
+      DiscoursePrivateTopics.can_manage_topic_access?(topic, scope.user)
+  end
+
+  add_to_serializer(:post, :private_topic_access_entries) do
+    next [] unless object.post_number == 1
+
+    DiscoursePrivateTopics.serialized_access_entries(object.topic)
+  end
+
+  add_to_serializer(:post, :include_private_topic_manageable_groups?) do
+    next false unless object.post_number == 1
+
+    topic = object.topic
+
+    scope.can_see_topic?(topic) &&
+      DiscoursePrivateTopics.can_manage_topic_access?(topic, scope.user)
+  end
+
+  add_to_serializer(:post, :private_topic_manageable_groups) do
+    next [] unless object.post_number == 1
+
+    DiscoursePrivateTopics.manageable_groups_for_user(scope.user)
+  end
+
+  add_to_serializer(:post, :include_private_topic_allowed_users?) do
+    next false unless object.post_number == 1
+
+    topic = object.topic
+
+    DiscoursePrivateTopics.allowed_users_storage_ready? &&
+      scope.can_see_topic?(topic) &&
+      DiscoursePrivateTopics.can_manage_topic_access?(topic, scope.user)
+  end
+
+  add_to_serializer(:post, :private_topic_allowed_users) do
+    next [] unless object.post_number == 1
+
+    DiscoursePrivateTopics.serialized_allowed_users(object.topic)
   end
 end

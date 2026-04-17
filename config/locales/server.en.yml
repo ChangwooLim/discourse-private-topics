@@ -2,4 +2,24 @@ en:
   site_settings:
     private_topics_enabled: "Enable Private Topics plugin"
     private_topics_permitted_groups: "Always show topics started by a member of these groups"
+    private_topics_allowed_user_manager_groups: "Groups allowed to manage per-topic additional viewers"
     private_topics_admin_sees_all: "Allow admin users to see all topics"
+    private_topics_send_access_granted_notifications: "Send a system DM when a user is newly granted topic access"
+  private_topics:
+    access_levels:
+      read: "read only"
+      reply: "read and reply"
+    notifications:
+      access_granted:
+        subject: "You were granted access to \"%{topic_title}\""
+        body: "%{actor_username} granted you %{access_level} access to [%{topic_title}](%{topic_url})."
+    errors:
+      allowed_users_storage_unavailable: "Topic access lists are temporarily unavailable until the plugin migration has been run."
+      invalid_access_level: "The provided access level is invalid."
+      invalid_user_ids: "These user ids could not be found: %{user_ids}"
+      invalid_users: "These usernames could not be found: %{usernames}"
+      invalid_group_ids: "These group ids could not be found: %{group_ids}"
+      invalid_groups: "These groups could not be found: %{group_names}"
+      unauthorized_groups: "You can only grant access to groups you belong to: %{group_names}"
+      private_category_required: "Topic access lists can only be used in categories with private topics enabled."
+      users_without_category_access: "These users cannot access the topic category: %{usernames}"
