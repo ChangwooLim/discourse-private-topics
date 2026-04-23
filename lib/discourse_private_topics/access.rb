@@ -45,7 +45,7 @@ module ::DiscoursePrivateTopics
     end
 
     def admin_bypass?(user)
-      private_topics_enabled? && SiteSetting.private_topics_admin_sees_all && user&.admin?
+      private_topics_enabled? && SiteSetting.private_topics_admin_sees_all && authenticated_user?(user) && user.admin?
     end
 
     def private_category_ids
@@ -58,7 +58,7 @@ module ::DiscoursePrivateTopics
 
     def topic_author_exempt_user_ids(user)
       user_ids = [Discourse.system_user.id]
-      user_ids << user.id if user && !user.anonymous?
+      user_ids << user.id if authenticated_user?(user)
 
       group_ids = parse_setting_group_ids(SiteSetting.private_topics_permitted_groups)
       user_ids.concat(GroupUser.where(group_id: group_ids).pluck(:user_id)) if group_ids.any?
@@ -71,7 +71,7 @@ module ::DiscoursePrivateTopics
     end
 
     def user_in_allowed_user_manager_group?(user)
-      return false unless user&.id
+      return false unless authenticated_user?(user)
 
       group_ids = allowed_user_manager_group_ids
       return false if group_ids.empty?
@@ -87,7 +87,7 @@ module ::DiscoursePrivateTopics
       return [] if user_in_allowed_user_manager_group?(user)
 
       category_group_map = category_ids.index_with { [] }
-      return category_group_map.keys unless user
+      return category_group_map.keys unless authenticated_user?(user)
 
       excluded_map =
         CategoryCustomField
@@ -115,7 +115,7 @@ module ::DiscoursePrivateTopics
     end
 
     def topic_direct_access_level(topic, user)
-      return nil unless topic&.id && user&.id
+      return nil unless topic&.id && authenticated_user?(user)
       return nil unless private_category_enabled?(topic.category_id)
       return nil unless allowed_users_storage_ready?
 
@@ -126,7 +126,7 @@ module ::DiscoursePrivateTopics
     end
 
     def topic_group_access_level(topic, user)
-      return nil unless topic&.id && user&.id
+      return nil unless topic&.id && authenticated_user?(user)
       return nil unless private_category_enabled?(topic.category_id)
       return nil unless allowed_groups_storage_ready?
 
@@ -172,7 +172,7 @@ module ::DiscoursePrivateTopics
     end
 
     def can_manage_topic_access?(topic, user)
-      return false unless topic&.id && user&.id
+      return false unless topic&.id && authenticated_user?(user)
       return false unless private_category_enabled?(topic.category_id)
       return false unless topic_visible_to_user?(topic, user)
 
@@ -184,11 +184,11 @@ module ::DiscoursePrivateTopics
     end
 
     def can_view_topic_access_history?(topic, user)
-      topic&.id && user&.admin? && topic_visible_to_user?(topic, user)
+      topic&.id && authenticated_user?(user) && user.admin? && topic_visible_to_user?(topic, user)
     end
 
     def manageable_groups_for_user(user)
-      return [] unless user&.id
+      return [] unless authenticated_user?(user)
 
       scope = user.admin? ? Group.where.not(id: 0) : user.groups.where.not(id: 0)
       scope = scope.where(automatic: false)
@@ -219,7 +219,7 @@ module ::DiscoursePrivateTopics
       ]
       values = { private_category_ids: private_ids, author_ids: author_ids }
 
-      if user&.id && allowed_users_storage_ready?
+      if authenticated_user?(user) && allowed_users_storage_ready?
         conditions << <<~SQL.squish
           EXISTS (
             SELECT 1
@@ -231,7 +231,7 @@ module ::DiscoursePrivateTopics
         values[:viewer_id] = user.id
       end
 
-      if user&.id && allowed_groups_storage_ready?
+      if authenticated_user?(user) && allowed_groups_storage_ready?
         conditions << <<~SQL.squish
           EXISTS (
             SELECT 1
@@ -391,6 +391,10 @@ module ::DiscoursePrivateTopics
     end
 
     private
+
+    def authenticated_user?(user)
+      user.present? && !user.anonymous?
+    end
 
     def parse_setting_group_ids(raw_ids)
       raw_ids.to_s.split("|").map(&:to_i).reject(&:zero?).uniq

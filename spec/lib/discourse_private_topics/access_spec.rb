@@ -126,6 +126,17 @@ describe DiscoursePrivateTopics do
     )
   end
 
+  it "treats anonymous guardian users as non-members without raising" do
+    anonymous_user = Guardian.new(nil).instance_variable_get(:@user)
+    relation = Topic.where(id: [private_topic.id, regular_topic.id])
+
+    expect(described_class.filtered_category_ids(anonymous_user)).to contain_exactly(private_category.id)
+    expect(described_class.topic_visible_to_user?(private_topic, anonymous_user)).to eq(false)
+    expect(described_class.filter_visible_topics(relation, anonymous_user).pluck(:id)).to contain_exactly(
+      regular_topic.id,
+    )
+  end
+
   it "updates group-based visibility dynamically as memberships change" do
     expect(described_class.topic_visible_to_user?(private_topic, group_reply_user)).to eq(true)
 

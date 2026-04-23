@@ -88,4 +88,8 @@ describe TopicGuardian do
   it "still hides the topic from unrelated users" do
     expect(Guardian.new(outsider).can_see_topic?(private_topic)).to eq(false)
   end
+
+  it "hides the topic from anonymous guardians without raising" do
+    expect(Guardian.new(nil).can_see_topic?(private_topic)).to eq(false)
+  end
 end
