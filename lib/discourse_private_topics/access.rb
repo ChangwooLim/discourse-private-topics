@@ -146,6 +146,22 @@ module ::DiscoursePrivateTopics
       topic_explicit_access_level(topic, user).present?
     end
 
+    def topic_visible_via_explicit_access?(topic, user)
+      return false unless private_topics_enabled?
+      return false unless topic&.id && authenticated_user?(user)
+      return false unless private_category_enabled?(topic.category_id)
+      return false unless topic_explicit_access_level(topic, user).present?
+      return false unless topic_available_for_explicit_access?(topic)
+
+      true
+    end
+
+    def topic_reply_via_explicit_access?(topic, user)
+      return false unless topic_visible_via_explicit_access?(topic, user)
+
+      topic_explicit_access_level(topic, user) == REPLY_ACCESS_LEVEL
+    end
+
     def topic_visible_to_user?(topic, user)
       return true unless private_topics_enabled?
       return true if admin_bypass?(user)
@@ -213,19 +229,27 @@ module ::DiscoursePrivateTopics
       return relation if private_ids.empty?
 
       author_ids = topic_author_exempt_user_ids(user)
+      available_topic_condition = available_topic_sql(topics_table)
       conditions = [
         "#{topics_table}.category_id NOT IN (:private_category_ids)",
-        "#{topics_table}.user_id IN (:author_ids)",
+        "(#{available_topic_condition} AND #{topics_table}.user_id IN (:author_ids))",
       ]
-      values = { private_category_ids: private_ids, author_ids: author_ids }
+      values = {
+        private_category_ids: private_ids,
+        author_ids: author_ids,
+        default_archetype: ::Archetype.default,
+      }
 
       if authenticated_user?(user) && allowed_users_storage_ready?
         conditions << <<~SQL.squish
-          EXISTS (
-            SELECT 1
-            FROM private_topic_allowed_users
-            WHERE private_topic_allowed_users.topic_id = #{topics_table}.id
-              AND private_topic_allowed_users.user_id = :viewer_id
+          (
+            #{available_topic_condition}
+            AND EXISTS (
+              SELECT 1
+              FROM private_topic_allowed_users
+              WHERE private_topic_allowed_users.topic_id = #{topics_table}.id
+                AND private_topic_allowed_users.user_id = :viewer_id
+            )
           )
         SQL
         values[:viewer_id] = user.id
@@ -233,13 +257,16 @@ module ::DiscoursePrivateTopics
 
       if authenticated_user?(user) && allowed_groups_storage_ready?
         conditions << <<~SQL.squish
-          EXISTS (
-            SELECT 1
-            FROM private_topic_allowed_groups
-            INNER JOIN group_users
-              ON group_users.group_id = private_topic_allowed_groups.group_id
-            WHERE private_topic_allowed_groups.topic_id = #{topics_table}.id
-              AND group_users.user_id = :viewer_id
+          (
+            #{available_topic_condition}
+            AND EXISTS (
+              SELECT 1
+              FROM private_topic_allowed_groups
+              INNER JOIN group_users
+                ON group_users.group_id = private_topic_allowed_groups.group_id
+              WHERE private_topic_allowed_groups.topic_id = #{topics_table}.id
+                AND group_users.user_id = :viewer_id
+            )
           )
         SQL
         values[:viewer_id] = user.id
@@ -550,17 +577,27 @@ module ::DiscoursePrivateTopics
     end
 
     def validate_user_entries!(topic:, user_entries:)
-      inaccessible_users = user_entries.map { |entry| entry[:user] }.reject { |user| Guardian.new(user).can_see?(topic.category) }
+      user_entries.reject { |entry| entry[:user].id == topic.user_id }
+    end
 
-      if inaccessible_users.any?
-        raise Discourse::InvalidParameters,
-              I18n.t(
-                "private_topics.errors.users_without_category_access",
-                usernames: inaccessible_users.map(&:username).join(", "),
-              )
+    def topic_available_for_explicit_access?(topic)
+      return false if topic.respond_to?(:deleted_at) && topic.deleted_at.present?
+      return false if topic.respond_to?(:trashed?) && topic.trashed?
+      return false if topic.respond_to?(:visible) && topic.visible == false
+
+      if defined?(::Archetype) && topic.respond_to?(:archetype) && topic.archetype.present?
+        return false if topic.archetype != ::Archetype.default
       end
 
-      user_entries.reject { |entry| entry[:user].id == topic.user_id }
+      true
+    end
+
+    def available_topic_sql(topics_table)
+      [
+        "#{topics_table}.deleted_at IS NULL",
+        "#{topics_table}.visible = true",
+        "#{topics_table}.archetype = :default_archetype",
+      ].join(" AND ")
     end
 
     def normalize_payload_entry(entry)

@@ -44,6 +44,9 @@ describe DiscoursePrivateTopics::AllowedUsersController do
   fab!(:restricted_private_topic) do
     Fabricate(:topic, category: restricted_private_category, user: author)
   end
+  fab!(:restricted_sibling_topic) do
+    Fabricate(:topic, category: restricted_private_category, user: author)
+  end
 
   def parsed_entries
     response.parsed_body["private_topic_access_entries"] || []
@@ -164,16 +167,38 @@ describe DiscoursePrivateTopics::AllowedUsersController do
     expect(response.status).to eq(400)
   end
 
-  it "rejects users who cannot read the topic category" do
+  it "lets managers grant access to users who cannot read the topic category" do
     sign_in(author)
 
     put "/private-topics/topics/#{restricted_private_topic.id}/allowed-users",
         params: { users: [{ id: restricted_candidate.id, access_level: "read" }] }
 
-    expect(response.status).to eq(400)
-    expect(response.parsed_body["errors"]).to include(
-      I18n.t("private_topics.errors.users_without_category_access", usernames: restricted_candidate.username),
-    )
+    expect(response.status).to eq(200)
+    expect(
+      PrivateTopicAllowedUser.find_by(topic: restricted_private_topic, user: restricted_candidate)&.access_level,
+    ).to eq("read")
+    expect(Guardian.new(restricted_candidate).can_create_post_on_topic?(restricted_private_topic)).to eq(false)
+
+    sign_in(restricted_candidate)
+
+    get "/t/#{restricted_private_topic.slug}/#{restricted_private_topic.id}.json"
+    expect(response.status).to eq(200)
+
+    get "/t/#{restricted_sibling_topic.slug}/#{restricted_sibling_topic.id}.json"
+    expect(response.status).to eq(404)
+  end
+
+  it "lets managers grant reply access to users who cannot read the topic category" do
+    sign_in(author)
+
+    put "/private-topics/topics/#{restricted_private_topic.id}/allowed-users",
+        params: { users: [{ id: restricted_candidate.id, access_level: "reply" }] }
+
+    expect(response.status).to eq(200)
+    expect(
+      PrivateTopicAllowedUser.find_by(topic: restricted_private_topic, user: restricted_candidate)&.access_level,
+    ).to eq("reply")
+    expect(Guardian.new(restricted_candidate).can_create_post_on_topic?(restricted_private_topic)).to eq(true)
   end
 
   it "returns validation errors for invalid groups and access levels" do

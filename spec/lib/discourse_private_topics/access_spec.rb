@@ -12,6 +12,9 @@ describe DiscoursePrivateTopics do
   fab!(:support_member) { Fabricate(:user) }
   fab!(:support_membership) { Fabricate(:group_user, group: support_group, user: support_member) }
 
+  fab!(:restricted_group) { Fabricate(:group) }
+  fab!(:restricted_candidate) { Fabricate(:user) }
+
   fab!(:manager_group) { Fabricate(:group) }
   fab!(:manager_user) { Fabricate(:user) }
   fab!(:manager_membership) { Fabricate(:group_user, group: manager_group, user: manager_user) }
@@ -42,7 +45,17 @@ describe DiscoursePrivateTopics do
     category
   end
 
+  fab!(:restricted_private_category) do
+    category = Fabricate(:category)
+    category.set_permissions(restricted_group.name => :full)
+    category.save!
+    category.upsert_custom_fields("private_topics_enabled" => "true")
+    category
+  end
+
   fab!(:private_topic) { Fabricate(:topic, category: private_category, user: author) }
+  fab!(:restricted_private_topic) { Fabricate(:topic, category: restricted_private_category, user: author) }
+  fab!(:restricted_sibling_topic) { Fabricate(:topic, category: restricted_private_category, user: author) }
   fab!(:regular_topic) { Fabricate(:topic, category: regular_category, user: author) }
 
   before do
@@ -124,6 +137,96 @@ describe DiscoursePrivateTopics do
     expect(described_class.filter_visible_topics(relation, outsider).pluck(:id)).to contain_exactly(
       regular_topic.id,
     )
+  end
+
+  it "filters restricted-category topic relations down to explicit topic grants" do
+    PrivateTopicAllowedUser.create!(
+      topic: restricted_private_topic,
+      user: restricted_candidate,
+      granted_by: author,
+      access_level: described_class::READ_ACCESS_LEVEL,
+    )
+
+    relation = Topic.where(id: [restricted_private_topic.id, restricted_sibling_topic.id])
+
+    expect(described_class.filter_visible_topics(relation, restricted_candidate).pluck(:id)).to contain_exactly(
+      restricted_private_topic.id,
+    )
+  end
+
+  it "distinguishes read and reply explicit grants without category access" do
+    PrivateTopicAllowedUser.create!(
+      topic: restricted_private_topic,
+      user: restricted_candidate,
+      granted_by: author,
+      access_level: described_class::READ_ACCESS_LEVEL,
+    )
+
+    expect(described_class.topic_visible_via_explicit_access?(restricted_private_topic, restricted_candidate)).to eq(
+      true,
+    )
+    expect(described_class.topic_reply_via_explicit_access?(restricted_private_topic, restricted_candidate)).to eq(
+      false,
+    )
+
+    PrivateTopicAllowedUser.find_by(topic: restricted_private_topic, user: restricted_candidate).update!(
+      access_level: described_class::REPLY_ACCESS_LEVEL,
+    )
+
+    expect(described_class.topic_reply_via_explicit_access?(restricted_private_topic, restricted_candidate)).to eq(
+      true,
+    )
+  end
+
+  it "does not let explicit topic grants expose unavailable topics" do
+    PrivateTopicAllowedUser.create!(
+      topic: restricted_private_topic,
+      user: restricted_candidate,
+      granted_by: author,
+      access_level: described_class::READ_ACCESS_LEVEL,
+    )
+
+    restricted_private_topic.update_columns(deleted_at: Time.zone.now)
+
+    expect(
+      described_class.topic_visible_via_explicit_access?(restricted_private_topic.reload, restricted_candidate),
+    ).to eq(false)
+    expect(
+      described_class.filter_visible_topics(Topic.where(id: restricted_private_topic.id), restricted_candidate),
+    ).to be_empty
+  end
+
+  it "does not include non-default archetypes through explicit relation filters" do
+    PrivateTopicAllowedUser.create!(
+      topic: restricted_private_topic,
+      user: restricted_candidate,
+      granted_by: author,
+      access_level: described_class::READ_ACCESS_LEVEL,
+    )
+
+    restricted_private_topic.update_columns(archetype: Archetype.private_message)
+
+    expect(
+      described_class.filter_visible_topics(Topic.where(id: restricted_private_topic.id), restricted_candidate),
+    ).to be_empty
+  end
+
+  it "does not let explicit topic grants expose hidden topics" do
+    PrivateTopicAllowedUser.create!(
+      topic: restricted_private_topic,
+      user: restricted_candidate,
+      granted_by: author,
+      access_level: described_class::READ_ACCESS_LEVEL,
+    )
+
+    restricted_private_topic.update_columns(visible: false)
+
+    expect(
+      described_class.topic_visible_via_explicit_access?(restricted_private_topic.reload, restricted_candidate),
+    ).to eq(false)
+    expect(
+      described_class.filter_visible_topics(Topic.where(id: restricted_private_topic.id), restricted_candidate),
+    ).to be_empty
   end
 
   it "treats anonymous guardian users as non-members without raising" do

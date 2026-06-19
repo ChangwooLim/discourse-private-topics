@@ -15,6 +15,14 @@ describe TopicGuardian do
   fab!(:author) { Fabricate(:user) }
   fab!(:direct_read_user) { Fabricate(:user) }
   fab!(:direct_reply_user) { Fabricate(:user) }
+  fab!(:restricted_group) { Fabricate(:group) }
+  fab!(:restricted_read_candidate) { Fabricate(:user) }
+  fab!(:restricted_candidate) { Fabricate(:user) }
+  fab!(:restricted_group_grant_group) { Fabricate(:group) }
+  fab!(:restricted_group_grant_user) { Fabricate(:user) }
+  fab!(:restricted_group_grant_membership) do
+    Fabricate(:group_user, group: restricted_group_grant_group, user: restricted_group_grant_user)
+  end
   fab!(:group_read_group) { Fabricate(:group) }
   fab!(:group_read_user) { Fabricate(:user) }
   fab!(:group_read_membership) { Fabricate(:group_user, group: group_read_group, user: group_read_user) }
@@ -31,7 +39,17 @@ describe TopicGuardian do
     category
   end
 
+  fab!(:restricted_private_category) do
+    category = Fabricate(:category)
+    category.set_permissions(restricted_group.name => :full)
+    category.save!
+    category.upsert_custom_fields("private_topics_enabled" => "true")
+    category
+  end
+
   fab!(:private_topic) { Fabricate(:topic, category: private_category, user: author) }
+  fab!(:restricted_private_topic) { Fabricate(:topic, category: restricted_private_category, user: author) }
+  fab!(:restricted_sibling_topic) { Fabricate(:topic, category: restricted_private_category, user: author) }
 
   before do
     PrivateTopicAllowedUser.create!(
@@ -91,5 +109,69 @@ describe TopicGuardian do
 
   it "hides the topic from anonymous guardians without raising" do
     expect(Guardian.new(nil).can_see_topic?(private_topic)).to eq(false)
+  end
+
+  it "lets directly granted viewers see a topic even without category access" do
+    PrivateTopicAllowedUser.create!(
+      topic: restricted_private_topic,
+      user: restricted_candidate,
+      granted_by: author,
+      access_level: "reply",
+    )
+
+    guardian = Guardian.new(restricted_candidate)
+
+    expect(guardian.can_see?(restricted_private_category)).to eq(false)
+    expect(guardian.can_see_topic?(restricted_private_topic)).to eq(true)
+    expect(guardian.can_see_topic?(restricted_sibling_topic)).to eq(false)
+    expect(guardian.can_create_post_on_topic?(restricted_private_topic)).to eq(true)
+  end
+
+  it "keeps directly granted read-only viewers from replying without category access" do
+    PrivateTopicAllowedUser.create!(
+      topic: restricted_private_topic,
+      user: restricted_read_candidate,
+      granted_by: author,
+      access_level: "read",
+    )
+
+    guardian = Guardian.new(restricted_read_candidate)
+
+    expect(guardian.can_see?(restricted_private_category)).to eq(false)
+    expect(guardian.can_see_topic?(restricted_private_topic)).to eq(true)
+    expect(guardian.can_create_post_on_topic?(restricted_private_topic)).to eq(false)
+  end
+
+  it "lets group-granted viewers see a topic even without category access" do
+    PrivateTopicAllowedGroup.create!(
+      topic: restricted_private_topic,
+      group: restricted_group_grant_group,
+      granted_by: author,
+      access_level: "reply",
+    )
+
+    guardian = Guardian.new(restricted_group_grant_user)
+
+    expect(guardian.can_see?(restricted_private_category)).to eq(false)
+    expect(guardian.can_see_topic?(restricted_private_topic)).to eq(true)
+    expect(guardian.can_see_topic?(restricted_sibling_topic)).to eq(false)
+    expect(guardian.can_create_post_on_topic?(restricted_private_topic)).to eq(true)
+  end
+
+  it "keeps topic state restrictions for explicit reply viewers without category access" do
+    PrivateTopicAllowedUser.create!(
+      topic: restricted_private_topic,
+      user: restricted_candidate,
+      granted_by: author,
+      access_level: "reply",
+    )
+
+    guardian = Guardian.new(restricted_candidate)
+
+    restricted_private_topic.update!(closed: true)
+    expect(guardian.can_create_post_on_topic?(restricted_private_topic)).to eq(false)
+
+    restricted_private_topic.update!(closed: false, archived: true)
+    expect(guardian.can_create_post_on_topic?(restricted_private_topic)).to eq(false)
   end
 end
