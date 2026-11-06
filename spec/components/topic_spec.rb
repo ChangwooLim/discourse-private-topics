@@ -27,11 +27,11 @@ describe Topic do
   end
 
   fab!(:regular_category) { Fabricate(:category) }
-  fab!(:private_topic) { Fabricate(:topic, category: private_category, user: author, title: "Digest Alpha") }
+  fab!(:private_topic) { Fabricate(:topic, category: private_category, user: author, title: "Digest Alpha private topic", created_at: 1.hour.ago) }
   fab!(:group_private_topic) do
-    Fabricate(:topic, category: private_category, user: author, title: "Digest Beta")
+    Fabricate(:topic, category: private_category, user: author, title: "Digest Beta private topic", created_at: 1.hour.ago)
   end
-  fab!(:regular_topic) { Fabricate(:topic, category: regular_category, user: author, title: "Digest Gamma") }
+  fab!(:regular_topic) { Fabricate(:topic, category: regular_category, user: author, title: "Digest Gamma regular topic", created_at: 1.hour.ago) }
 
   before do
     PrivateTopicAllowedUser.create!(

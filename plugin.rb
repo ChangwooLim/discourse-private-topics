@@ -1,6 +1,6 @@
 # name: discourse-private-topics
 # about: Allows to keep topics private to the topic creator and specific groups.
-# version: 1.7.0
+# version: 1.8.0
 # authors: Communiteq
 # meta_topic_id: 268646
 # url: https://github.com/communiteq/discourse-private-topics
@@ -91,139 +91,68 @@ after_initialize do
     DiscoursePrivateTopics::Modifiers::TopicViewLinkCounts.call(link_counts)
   end
 
-  add_to_serializer(:topic_view, :can_manage_private_topic_access) do
-    topic = object.topic
-
-    DiscoursePrivateTopics.access_entries_storage_ready? &&
-      scope.can_see_topic?(topic) &&
-      DiscoursePrivateTopics.can_manage_topic_access?(topic, scope.user)
+  manages_access = ->(topic, guardian) do
+    guardian.can_see_topic?(topic) &&
+      DiscoursePrivateTopics.can_manage_topic_access?(topic, guardian.user)
   end
 
-  add_to_serializer(:topic_view, :can_manage_private_topic_allowed_users) do
-    topic = object.topic
-
-    DiscoursePrivateTopics.access_entries_storage_ready? &&
-      scope.can_see_topic?(topic) &&
-      DiscoursePrivateTopics.can_manage_topic_access?(topic, scope.user)
+  views_history = ->(topic, guardian) do
+    DiscoursePrivateTopics.access_history_storage_ready? && guardian.can_see_topic?(topic) &&
+      DiscoursePrivateTopics.can_view_topic_access_history?(topic, guardian.user)
   end
 
-  add_to_serializer(:topic_view, :can_view_private_topic_access_history) do
-    topic = object.topic
+  # The topic view describes the topic's access; the first post repeats it for the post menu button.
+  # The access lists use include_condition: add_to_serializer redefines include_<attr>? as "plugin
+  # enabled" for every attribute it adds, which silently replaced the separate include_*? overrides
+  # this plugin used to register and sent the lists to every reader of the topic.
+  {
+    topic_view: ->(serializer) { serializer.object.topic },
+    post: ->(serializer) { serializer.object.topic if serializer.object.post_number == 1 },
+  }.each do |serializer, access_topic|
+    add_to_serializer(serializer, :can_manage_private_topic_access) do
+      topic = access_topic.call(self)
+      topic.present? && DiscoursePrivateTopics.access_entries_storage_ready? &&
+        manages_access.call(topic, scope)
+    end
 
-    DiscoursePrivateTopics.access_history_storage_ready? &&
-      scope.can_see_topic?(topic) &&
-      DiscoursePrivateTopics.can_view_topic_access_history?(topic, scope.user)
-  end
+    add_to_serializer(serializer, :can_manage_private_topic_allowed_users) do
+      topic = access_topic.call(self)
+      topic.present? && DiscoursePrivateTopics.access_entries_storage_ready? &&
+        manages_access.call(topic, scope)
+    end
 
-  add_to_serializer(:topic_view, :include_private_topic_access_entries?) do
-    topic = object.topic
+    add_to_serializer(serializer, :can_view_private_topic_access_history) do
+      topic = access_topic.call(self)
+      topic.present? && views_history.call(topic, scope)
+    end
 
-    DiscoursePrivateTopics.access_entries_storage_ready? &&
-      scope.can_see_topic?(topic) &&
-      DiscoursePrivateTopics.can_manage_topic_access?(topic, scope.user)
-  end
+    add_to_serializer(
+      serializer,
+      :private_topic_access_entries,
+      include_condition: -> do
+        topic = access_topic.call(self)
+        topic.present? && DiscoursePrivateTopics.access_entries_storage_ready? &&
+          manages_access.call(topic, scope)
+      end,
+    ) { DiscoursePrivateTopics.serialized_access_entries(access_topic.call(self)) }
 
-  add_to_serializer(:topic_view, :private_topic_access_entries) do
-    DiscoursePrivateTopics.serialized_access_entries(object.topic)
-  end
+    add_to_serializer(
+      serializer,
+      :private_topic_manageable_groups,
+      include_condition: -> do
+        topic = access_topic.call(self)
+        topic.present? && manages_access.call(topic, scope)
+      end,
+    ) { DiscoursePrivateTopics.manageable_groups_for_user(scope.user) }
 
-  add_to_serializer(:topic_view, :include_private_topic_manageable_groups?) do
-    topic = object.topic
-
-    scope.can_see_topic?(topic) &&
-      DiscoursePrivateTopics.can_manage_topic_access?(topic, scope.user)
-  end
-
-  add_to_serializer(:topic_view, :private_topic_manageable_groups) do
-    DiscoursePrivateTopics.manageable_groups_for_user(scope.user)
-  end
-
-  add_to_serializer(:topic_view, :include_private_topic_allowed_users?) do
-    topic = object.topic
-
-    DiscoursePrivateTopics.allowed_users_storage_ready? &&
-      scope.can_see_topic?(topic) &&
-      DiscoursePrivateTopics.can_manage_topic_access?(topic, scope.user)
-  end
-
-  add_to_serializer(:topic_view, :private_topic_allowed_users) do
-    DiscoursePrivateTopics.serialized_allowed_users(object.topic)
-  end
-
-  add_to_serializer(:post, :can_manage_private_topic_access) do
-    next false unless object.post_number == 1
-
-    topic = object.topic
-
-    DiscoursePrivateTopics.access_entries_storage_ready? &&
-      scope.can_see_topic?(topic) &&
-      DiscoursePrivateTopics.can_manage_topic_access?(topic, scope.user)
-  end
-
-  add_to_serializer(:post, :can_manage_private_topic_allowed_users) do
-    next false unless object.post_number == 1
-
-    topic = object.topic
-
-    DiscoursePrivateTopics.access_entries_storage_ready? &&
-      scope.can_see_topic?(topic) &&
-      DiscoursePrivateTopics.can_manage_topic_access?(topic, scope.user)
-  end
-
-  add_to_serializer(:post, :can_view_private_topic_access_history) do
-    next false unless object.post_number == 1
-
-    topic = object.topic
-
-    DiscoursePrivateTopics.access_history_storage_ready? &&
-      scope.can_see_topic?(topic) &&
-      DiscoursePrivateTopics.can_view_topic_access_history?(topic, scope.user)
-  end
-
-  add_to_serializer(:post, :include_private_topic_access_entries?) do
-    next false unless object.post_number == 1
-
-    topic = object.topic
-
-    DiscoursePrivateTopics.access_entries_storage_ready? &&
-      scope.can_see_topic?(topic) &&
-      DiscoursePrivateTopics.can_manage_topic_access?(topic, scope.user)
-  end
-
-  add_to_serializer(:post, :private_topic_access_entries) do
-    next [] unless object.post_number == 1
-
-    DiscoursePrivateTopics.serialized_access_entries(object.topic)
-  end
-
-  add_to_serializer(:post, :include_private_topic_manageable_groups?) do
-    next false unless object.post_number == 1
-
-    topic = object.topic
-
-    scope.can_see_topic?(topic) &&
-      DiscoursePrivateTopics.can_manage_topic_access?(topic, scope.user)
-  end
-
-  add_to_serializer(:post, :private_topic_manageable_groups) do
-    next [] unless object.post_number == 1
-
-    DiscoursePrivateTopics.manageable_groups_for_user(scope.user)
-  end
-
-  add_to_serializer(:post, :include_private_topic_allowed_users?) do
-    next false unless object.post_number == 1
-
-    topic = object.topic
-
-    DiscoursePrivateTopics.allowed_users_storage_ready? &&
-      scope.can_see_topic?(topic) &&
-      DiscoursePrivateTopics.can_manage_topic_access?(topic, scope.user)
-  end
-
-  add_to_serializer(:post, :private_topic_allowed_users) do
-    next [] unless object.post_number == 1
-
-    DiscoursePrivateTopics.serialized_allowed_users(object.topic)
+    add_to_serializer(
+      serializer,
+      :private_topic_allowed_users,
+      include_condition: -> do
+        topic = access_topic.call(self)
+        topic.present? && DiscoursePrivateTopics.allowed_users_storage_ready? &&
+          manages_access.call(topic, scope)
+      end,
+    ) { DiscoursePrivateTopics.serialized_allowed_users(access_topic.call(self)) }
   end
 end

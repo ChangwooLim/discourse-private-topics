@@ -26,6 +26,7 @@ describe "Private topic serializers" do
   end
 
   fab!(:private_topic) { Fabricate(:topic, category: private_category, user: author) }
+  fab!(:private_topic_first_post) { Fabricate(:post, topic: private_topic, user: author) }
 
   before do
     PrivateTopicAllowedUser.create!(
@@ -63,10 +64,8 @@ describe "Private topic serializers" do
         "access_level" => "reply",
       ),
     )
-    expect(response.parsed_body["private_topic_manageable_groups"]).to eq(
-      [
-        a_hash_including("id" => shared_group.id, "name" => shared_group.name),
-      ],
+    expect(response.parsed_body["private_topic_manageable_groups"]).to contain_exactly(
+      a_hash_including("id" => shared_group.id, "name" => shared_group.name),
     )
     expect(response.parsed_body["private_topic_allowed_users"]).to include(
       a_hash_including("id" => allowed_user.id, "username" => allowed_user.username, "access_level" => "read"),
