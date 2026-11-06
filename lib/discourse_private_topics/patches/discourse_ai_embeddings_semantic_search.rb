@@ -3,7 +3,8 @@
 module DiscoursePrivateTopics
   module Patches
     module DiscourseAiEmbeddingsSemanticSearch
-      def search_for_topics(query, page = 1, hyde: true)
+      # Pass arguments through unchanged: discourse-ai added private_messages: in Discourse 2026.10.
+      def search_for_topics(*args, **kwargs)
         posts = super
         return posts unless DiscoursePrivateTopics.private_topics_enabled?
 

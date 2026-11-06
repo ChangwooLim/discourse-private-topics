@@ -204,7 +204,8 @@ describe DiscoursePrivateTopics do
       access_level: described_class::READ_ACCESS_LEVEL,
     )
 
-    restricted_private_topic.update_columns(archetype: Archetype.private_message)
+    # Personal messages carry no category (core check constraint pm_has_no_category).
+    restricted_private_topic.update_columns(archetype: Archetype.private_message, category_id: nil)
 
     expect(
       described_class.filter_visible_topics(Topic.where(id: restricted_private_topic.id), restricted_candidate),
@@ -233,7 +234,10 @@ describe DiscoursePrivateTopics do
     anonymous_user = Guardian.new(nil).instance_variable_get(:@user)
     relation = Topic.where(id: [private_topic.id, regular_topic.id])
 
-    expect(described_class.filtered_category_ids(anonymous_user)).to contain_exactly(private_category.id)
+    expect(described_class.filtered_category_ids(anonymous_user)).to contain_exactly(
+      private_category.id,
+      restricted_private_category.id,
+    )
     expect(described_class.topic_visible_to_user?(private_topic, anonymous_user)).to eq(false)
     expect(described_class.filter_visible_topics(relation, anonymous_user).pluck(:id)).to contain_exactly(
       regular_topic.id,

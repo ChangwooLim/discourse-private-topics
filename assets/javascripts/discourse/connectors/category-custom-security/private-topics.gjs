@@ -8,6 +8,12 @@ import { i18n } from "discourse-i18n";
 import GroupChooser from "select-kit/components/group-chooser";
 
 export default class PrivateTopics extends Component {
+  // The category editor before Discourse 2026.7 saves the category model directly. The newer
+  // editor passes a FormKit form instead; private-topics-form.gjs handles that one.
+  static shouldRender(args) {
+    return !args.form;
+  }
+
   @service site;
   @service siteSettings;
 

@@ -48,6 +48,7 @@ describe TopicGuardian do
   end
 
   fab!(:private_topic) { Fabricate(:topic, category: private_category, user: author) }
+  fab!(:private_topic_first_post) { Fabricate(:post, topic: private_topic, user: author) }
   fab!(:restricted_private_topic) { Fabricate(:topic, category: restricted_private_category, user: author) }
   fab!(:restricted_sibling_topic) { Fabricate(:topic, category: restricted_private_category, user: author) }
 

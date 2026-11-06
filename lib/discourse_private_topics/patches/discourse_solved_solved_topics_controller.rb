@@ -4,6 +4,11 @@ module DiscoursePrivateTopics
   module Patches
     module DiscourseSolvedSolvedTopicsController
       def by_user
+        # discourse-solved with DiscourseSolved::TopicAnswer (Discourse 2026.4 and later) runs every
+        # answer through guardian.can_see_post?, which reaches the patched can_see_topic?. The copy
+        # below joins on discourse_solved_solved_topics.answer_post_id, which that version stops
+        # writing, and it would skip the hidden-post and whisper checks core added.
+        return super if defined?(::DiscourseSolved::TopicAnswer)
         return super unless DiscoursePrivateTopics.private_topics_enabled?
         return super if DiscoursePrivateTopics.admin_bypass?(current_user)
 

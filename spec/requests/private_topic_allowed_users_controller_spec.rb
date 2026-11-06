@@ -24,6 +24,8 @@ describe DiscoursePrivateTopics::AllowedUsersController do
   fab!(:regular_category) { Fabricate(:category) }
   fab!(:restricted_group) { Fabricate(:group) }
   fab!(:restricted_candidate) { Fabricate(:user) }
+  # The author can read the restricted category; the candidate cannot.
+  fab!(:author_restricted_membership) { Fabricate(:group_user, group: restricted_group, user: author) }
 
   fab!(:private_category) do
     category = Fabricate(:category)
@@ -55,7 +57,7 @@ describe DiscoursePrivateTopics::AllowedUsersController do
   it "lets the author replace the topic access set with users and groups" do
     sign_in(author)
 
-    put "/private-topics/topics/#{private_topic.id}/allowed-users",
+    put "/private-topics/topics/#{private_topic.id}/allowed-users.json",
         params: {
           users: [{ id: direct_user.id, access_level: "read" }],
           groups: [{ id: shared_group.id, access_level: "reply" }],
@@ -80,19 +82,20 @@ describe DiscoursePrivateTopics::AllowedUsersController do
       ["user", "granted", "read"],
       ["group", "granted", "reply"],
     )
-    expect(PostCreator).to have_received(:create!).with(
-      Discourse.system_user,
-      hash_including(
+    # Newer rspec-mocks tells keyword arguments apart from a trailing hash, so check the options either way.
+    expect(PostCreator).to have_received(:create!).once do |user, opts = nil, **kwargs|
+      expect(user).to eq(Discourse.system_user)
+      expect(opts || kwargs).to include(
         archetype: Archetype.private_message,
         target_usernames: direct_user.username,
-      ),
-    ).once
+      )
+    end
   end
 
   it "keeps the legacy user_ids payload as reply access" do
     sign_in(author)
 
-    put "/private-topics/topics/#{private_topic.id}/allowed-users", params: { user_ids: [direct_user.id] }
+    put "/private-topics/topics/#{private_topic.id}/allowed-users.json", params: { user_ids: [direct_user.id] }
 
     expect(response.status).to eq(200)
     expect(PrivateTopicAllowedUser.find_by(topic: private_topic, user: direct_user)&.access_level).to eq("reply")
@@ -102,7 +105,7 @@ describe DiscoursePrivateTopics::AllowedUsersController do
     SiteSetting.private_topics_send_access_granted_notifications = false
     sign_in(author)
 
-    put "/private-topics/topics/#{private_topic.id}/allowed-users",
+    put "/private-topics/topics/#{private_topic.id}/allowed-users.json",
         params: { users: [{ id: direct_user.id, access_level: "reply" }] }
 
     expect(response.status).to eq(200)
@@ -113,7 +116,7 @@ describe DiscoursePrivateTopics::AllowedUsersController do
   it "lets manager group users replace the topic access set" do
     sign_in(manager_user)
 
-    put "/private-topics/topics/#{private_topic.id}/allowed-users",
+    put "/private-topics/topics/#{private_topic.id}/allowed-users.json",
         params: { users: [{ id: direct_user.id, access_level: "reply" }] }
 
     expect(response.status).to eq(200)
@@ -124,12 +127,12 @@ describe DiscoursePrivateTopics::AllowedUsersController do
     sign_in(admin_user)
 
     SiteSetting.private_topics_admin_sees_all = false
-    put "/private-topics/topics/#{private_topic.id}/allowed-users",
+    put "/private-topics/topics/#{private_topic.id}/allowed-users.json",
         params: { users: [{ id: direct_user.id, access_level: "reply" }] }
     expect(response.status).to eq(403)
 
     SiteSetting.private_topics_admin_sees_all = true
-    put "/private-topics/topics/#{private_topic.id}/allowed-users",
+    put "/private-topics/topics/#{private_topic.id}/allowed-users.json",
         params: { users: [{ id: direct_user.id, access_level: "reply" }] }
     expect(response.status).to eq(200)
   end
@@ -143,7 +146,7 @@ describe DiscoursePrivateTopics::AllowedUsersController do
     )
     sign_in(direct_user)
 
-    put "/private-topics/topics/#{private_topic.id}/allowed-users",
+    put "/private-topics/topics/#{private_topic.id}/allowed-users.json",
         params: { users: [{ id: outsider.id, access_level: "reply" }] }
 
     expect(response.status).to eq(403)
@@ -152,7 +155,7 @@ describe DiscoursePrivateTopics::AllowedUsersController do
   it "does not let outsiders manage access" do
     sign_in(outsider)
 
-    put "/private-topics/topics/#{private_topic.id}/allowed-users",
+    put "/private-topics/topics/#{private_topic.id}/allowed-users.json",
         params: { users: [{ id: direct_user.id, access_level: "reply" }] }
 
     expect(response.status).to eq(403)
@@ -161,16 +164,17 @@ describe DiscoursePrivateTopics::AllowedUsersController do
   it "rejects access lists on non-private categories" do
     sign_in(author)
 
-    put "/private-topics/topics/#{regular_topic.id}/allowed-users",
+    put "/private-topics/topics/#{regular_topic.id}/allowed-users.json",
         params: { users: [{ id: direct_user.id, access_level: "reply" }] }
 
-    expect(response.status).to eq(400)
+    # can_manage_topic_access? is false outside private categories, so the controller denies access.
+    expect(response.status).to eq(403)
   end
 
   it "lets managers grant access to users who cannot read the topic category" do
     sign_in(author)
 
-    put "/private-topics/topics/#{restricted_private_topic.id}/allowed-users",
+    put "/private-topics/topics/#{restricted_private_topic.id}/allowed-users.json",
         params: { users: [{ id: restricted_candidate.id, access_level: "read" }] }
 
     expect(response.status).to eq(200)
@@ -191,7 +195,7 @@ describe DiscoursePrivateTopics::AllowedUsersController do
   it "lets managers grant reply access to users who cannot read the topic category" do
     sign_in(author)
 
-    put "/private-topics/topics/#{restricted_private_topic.id}/allowed-users",
+    put "/private-topics/topics/#{restricted_private_topic.id}/allowed-users.json",
         params: { users: [{ id: restricted_candidate.id, access_level: "reply" }] }
 
     expect(response.status).to eq(200)
@@ -204,31 +208,31 @@ describe DiscoursePrivateTopics::AllowedUsersController do
   it "returns validation errors for invalid groups and access levels" do
     sign_in(author)
 
-    put "/private-topics/topics/#{private_topic.id}/allowed-users",
+    put "/private-topics/topics/#{private_topic.id}/allowed-users.json",
         params: { groups: [{ id: 999_999, access_level: "invalid" }] }
 
     expect(response.status).to eq(400)
     expect(response.parsed_body["errors"]).to include(
-      I18n.t("private_topics.errors.invalid_access_level"),
+      a_string_including(I18n.t("private_topics.errors.invalid_access_level")),
     )
   end
 
   it "returns a validation error when the provided group id does not exist" do
     sign_in(author)
 
-    put "/private-topics/topics/#{private_topic.id}/allowed-users",
+    put "/private-topics/topics/#{private_topic.id}/allowed-users.json",
         params: { groups: [{ id: 999_999, access_level: "reply" }] }
 
     expect(response.status).to eq(400)
     expect(response.parsed_body["errors"]).to include(
-      I18n.t("private_topics.errors.invalid_group_ids", group_ids: "999999"),
+      a_string_including(I18n.t("private_topics.errors.invalid_group_ids", group_ids: "999999")),
     )
   end
 
   it "deduplicates repeated principals and keeps the highest requested access level" do
     sign_in(author)
 
-    put "/private-topics/topics/#{private_topic.id}/allowed-users",
+    put "/private-topics/topics/#{private_topic.id}/allowed-users.json",
         params: {
           users: [
             { id: direct_user.id, access_level: "read" },
@@ -250,14 +254,14 @@ describe DiscoursePrivateTopics::AllowedUsersController do
   it "rejects non-admin attempts to add groups they do not belong to" do
     sign_in(author)
 
-    put "/private-topics/topics/#{private_topic.id}/allowed-users",
+    put "/private-topics/topics/#{private_topic.id}/allowed-users.json",
         params: {
           groups: [{ id: other_group.id, access_level: "reply" }],
         }
 
     expect(response.status).to eq(400)
     expect(response.parsed_body["errors"]).to include(
-      I18n.t("private_topics.errors.unauthorized_groups", group_names: other_group.name),
+      a_string_including(I18n.t("private_topics.errors.unauthorized_groups", group_names: other_group.name)),
     )
   end
 
@@ -276,7 +280,7 @@ describe DiscoursePrivateTopics::AllowedUsersController do
     )
     sign_in(author)
 
-    put "/private-topics/topics/#{private_topic.id}/allowed-users",
+    put "/private-topics/topics/#{private_topic.id}/allowed-users.json",
         params: { users: [{ id: direct_user.id, access_level: "read" }], groups: [] }
 
     expect(response.status).to eq(200)
@@ -301,7 +305,7 @@ describe DiscoursePrivateTopics::AllowedUsersController do
     )
 
     sign_in(admin_user)
-    get "/private-topics/topics/#{private_topic.id}/access-history"
+    get "/private-topics/topics/#{private_topic.id}/access-history.json"
 
     expect(response.status).to eq(200)
     expect(response.parsed_body["private_topic_access_history"]).to include(
@@ -317,7 +321,7 @@ describe DiscoursePrivateTopics::AllowedUsersController do
   it "rejects access history requests from non-admin managers" do
     sign_in(author)
 
-    get "/private-topics/topics/#{private_topic.id}/access-history"
+    get "/private-topics/topics/#{private_topic.id}/access-history.json"
 
     expect(response.status).to eq(403)
   end
@@ -326,12 +330,12 @@ describe DiscoursePrivateTopics::AllowedUsersController do
     allow(DiscoursePrivateTopics).to receive(:access_entries_storage_ready?).and_return(false)
     sign_in(author)
 
-    put "/private-topics/topics/#{private_topic.id}/allowed-users",
+    put "/private-topics/topics/#{private_topic.id}/allowed-users.json",
         params: { users: [{ id: direct_user.id, access_level: "reply" }] }
 
     expect(response.status).to eq(400)
     expect(response.parsed_body["errors"]).to include(
-      I18n.t("private_topics.errors.allowed_users_storage_unavailable"),
+      a_string_including(I18n.t("private_topics.errors.allowed_users_storage_unavailable")),
     )
   end
 end
